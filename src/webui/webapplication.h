@@ -194,6 +194,7 @@ private:
         {{u"torrents"_s, u"filePrio"_s}, Http::METHOD_POST},
         {{u"torrents"_s, u"increasePrio"_s}, Http::METHOD_POST},
         {{u"torrents"_s, u"reannounce"_s}, Http::METHOD_POST},
+        {{u"torrents"_s, u"manageRatio"_s}, Http::METHOD_POST},
         {{u"torrents"_s, u"recheck"_s}, Http::METHOD_POST},
         {{u"torrents"_s, u"removeCategories"_s}, Http::METHOD_POST},
         {{u"torrents"_s, u"removeTags"_s}, Http::METHOD_POST},

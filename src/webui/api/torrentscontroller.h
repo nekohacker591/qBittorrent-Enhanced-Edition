@@ -54,6 +54,7 @@ private slots:
     void stopAction();
     void recheckAction();
     void reannounceAction();
+    void manageRatioAction();
     void renameAction();
     void setCategoryAction();
     void createCategoryAction();
