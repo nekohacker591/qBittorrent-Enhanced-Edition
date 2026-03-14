@@ -1397,45 +1397,17 @@ void TorrentsController::reannounceAction()
 
 void TorrentsController::manageRatioAction()
 {
-    requireParams({u"hashes"_s});
+    requireParams({u"hashes"_s, u"uploaded"_s, u"downloaded"_s});
 
-    const auto parseOptionalFlag = [this](const QString &key, const bool defaultValue)
-    {
-        if (!params().contains(key))
-            return defaultValue;
+    bool isUploadedValid = false;
+    const qlonglong uploaded = params()[u"uploaded"_s].toLongLong(&isUploadedValid);
+    if (!isUploadedValid || (uploaded < 0))
+        throw APIError(APIErrorType::BadParams, tr("Invalid uploaded value"));
 
-        if (const std::optional<bool> value = parseBool(params()[key]))
-            return value.value();
-
-        throw APIError(APIErrorType::BadParams, tr("Invalid value for parameter: %1").arg(key));
-    };
-
-    const bool reportUploaded = parseOptionalFlag(u"report_uploaded"_s, true);
-    const bool reportDownloaded = parseOptionalFlag(u"report_downloaded"_s, true);
-
-    qlonglong uploaded = 0;
-    if (reportUploaded)
-    {
-        if (!params().contains(u"uploaded"_s))
-            throw APIError(APIErrorType::BadParams, tr("Missing uploaded value"));
-
-        bool isUploadedValid = false;
-        uploaded = params()[u"uploaded"_s].toLongLong(&isUploadedValid);
-        if (!isUploadedValid || (uploaded < 0))
-            throw APIError(APIErrorType::BadParams, tr("Invalid uploaded value"));
-    }
-
-    qlonglong downloaded = 0;
-    if (reportDownloaded)
-    {
-        if (!params().contains(u"downloaded"_s))
-            throw APIError(APIErrorType::BadParams, tr("Missing downloaded value"));
-
-        bool isDownloadedValid = false;
-        downloaded = params()[u"downloaded"_s].toLongLong(&isDownloadedValid);
-        if (!isDownloadedValid || (downloaded < 0))
-            throw APIError(APIErrorType::BadParams, tr("Invalid downloaded value"));
-    }
+    bool isDownloadedValid = false;
+    const qlonglong downloaded = params()[u"downloaded"_s].toLongLong(&isDownloadedValid);
+    if (!isDownloadedValid || (downloaded < 0))
+        throw APIError(APIErrorType::BadParams, tr("Invalid downloaded value"));
 
     const QStringList hashes {params()[u"hashes"_s].split(u'|')};
 
@@ -1476,10 +1448,8 @@ void TorrentsController::manageRatioAction()
         }
 
         QUrlQuery query {announceURL};
-        if (reportUploaded)
-            query.addQueryItem(u"uploaded"_s, QString::number(uploaded));
-        if (reportDownloaded)
-            query.addQueryItem(u"downloaded"_s, QString::number(downloaded));
+        query.addQueryItem(u"uploaded"_s, QString::number(uploaded));
+        query.addQueryItem(u"downloaded"_s, QString::number(downloaded));
         query.addQueryItem(u"left"_s, u"0"_s);
 
         if (!event.isEmpty())
