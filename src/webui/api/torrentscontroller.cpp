@@ -37,6 +37,8 @@
 #include <QList>
 #include <QRegularExpression>
 #include <QUrl>
+#include <QUrlQuery>
+#include <QSet>
 
 #include "base/addtorrentmanager.h"
 #include "base/bittorrent/categoryoptions.h"
@@ -53,6 +55,8 @@
 #include "base/interfaces/iapplication.h"
 #include "base/global.h"
 #include "base/logger.h"
+#include "base/net/downloadmanager.h"
+#include "base/preferences.h"
 #include "base/torrentfilter.h"
 #include "base/utils/datetime.h"
 #include "base/utils/fs.h"
@@ -1389,6 +1393,104 @@ void TorrentsController::reannounceAction()
 
     const QStringList hashes {params()[u"hashes"_s].split(u'|')};
     applyToTorrents(hashes, [](BitTorrent::Torrent *const torrent) { torrent->forceReannounce(); });
+}
+
+void TorrentsController::manageRatioAction()
+{
+    requireParams({u"hashes"_s, u"uploaded"_s, u"downloaded"_s});
+
+    bool isUploadedValid = false;
+    const qlonglong uploaded = params()[u"uploaded"_s].toLongLong(&isUploadedValid);
+    if (!isUploadedValid || (uploaded < 0))
+        throw APIError(APIErrorType::BadParams, tr("Invalid uploaded value"));
+
+    bool isDownloadedValid = false;
+    const qlonglong downloaded = params()[u"downloaded"_s].toLongLong(&isDownloadedValid);
+    if (!isDownloadedValid || (downloaded < 0))
+        throw APIError(APIErrorType::BadParams, tr("Invalid downloaded value"));
+
+    const bool reportUploaded = parseBool(params().value(u"report_uploaded"_s)).value_or(true);
+    const bool reportDownloaded = parseBool(params().value(u"report_downloaded"_s)).value_or(true);
+
+    const QString event = params().value(u"event"_s).trimmed();
+    static const QSet<QString> supportedEvents = {u"started"_s, u"stopped"_s, u"completed"_s, u"paused"_s};
+    if (!event.isEmpty() && !supportedEvents.contains(event))
+        throw APIError(APIErrorType::BadParams, tr("Invalid event value"));
+
+    const QString peerID = params().value(u"peer_id"_s).trimmed();
+    const QString port = params().value(u"port"_s).trimmed();
+    const QString numwant = params().value(u"numwant"_s).trimmed();
+
+    const QStringList hashes {params()[u"hashes"_s].split(u'|')};
+
+    struct AnnounceRequestData
+    {
+        QUrl trackerURL;
+        QByteArray infoHash;
+    };
+
+    QList<AnnounceRequestData> announceRequests;
+    QSet<QString> uniqueRequestIDs;
+
+    applyToTorrents(hashes, [&announceRequests, &uniqueRequestIDs](BitTorrent::Torrent *const torrent)
+    {
+        const QByteArray infoHash = QByteArray::fromHex(torrent->id().toString().toLatin1());
+        if (infoHash.size() != SHA1Hash::length())
+            return;
+
+        const QList<BitTorrent::TrackerEntryStatus> torrentTrackers = torrent->trackers();
+        for (const BitTorrent::TrackerEntryStatus &tracker : torrentTrackers)
+        {
+            const QUrl trackerURL {tracker.url};
+            if (!trackerURL.isValid() || ((trackerURL.scheme() != u"http"_s) && (trackerURL.scheme() != u"https"_s)))
+                continue;
+
+            const QString requestID = (torrent->id().toString() + u'\n' + tracker.url);
+            if (uniqueRequestIDs.contains(requestID))
+                continue;
+
+            uniqueRequestIDs.insert(requestID);
+            announceRequests.append({trackerURL, infoHash});
+        }
+    });
+
+    if (announceRequests.isEmpty())
+        throw APIError(APIErrorType::Conflict, tr("No HTTP(S) trackers were found for selected torrent(s)"));
+
+    for (const AnnounceRequestData &requestData : announceRequests)
+    {
+        QUrl announceURL = requestData.trackerURL;
+        QUrlQuery query {announceURL};
+        query.addQueryItem(u"uploaded"_s, QString::number(reportUploaded ? uploaded : 0));
+        query.addQueryItem(u"downloaded"_s, QString::number(reportDownloaded ? downloaded : 0));
+        query.addQueryItem(u"left"_s, u"0"_s);
+
+        if (!event.isEmpty())
+            query.addQueryItem(u"event"_s, event);
+        if (!peerID.isEmpty())
+            query.addQueryItem(u"peer_id"_s, peerID);
+        if (!port.isEmpty())
+            query.addQueryItem(u"port"_s, port);
+        if (!numwant.isEmpty())
+            query.addQueryItem(u"numwant"_s, numwant);
+
+        announceURL.setQuery(query);
+
+        QByteArray encodedQuery = announceURL.query(QUrl::FullyEncoded).toLatin1();
+        if (!encodedQuery.isEmpty())
+            encodedQuery += '&';
+        encodedQuery += "info_hash=" + requestData.infoHash.toPercentEncoding();
+        announceURL.setQuery(QString::fromLatin1(encodedQuery));
+
+        Net::DownloadManager::instance()->download(Net::DownloadRequest(announceURL.toString(QUrl::FullyEncoded))
+                , Preferences::instance()->useProxyForGeneralPurposes(), this, [announceURL](const Net::DownloadResult &result)
+        {
+            if (result.status == Net::DownloadStatus::Success)
+                LogMsg(tr("Manage Ratio announce sent to %1").arg(announceURL.toString(QUrl::FullyEncoded)), Log::INFO);
+            else
+                LogMsg(tr("Manage Ratio announce failed for %1. Reason: \"%2\"").arg(announceURL.toString(QUrl::FullyEncoded), result.errorString), Log::WARNING);
+        });
+    }
 }
 
 void TorrentsController::setCategoryAction()
