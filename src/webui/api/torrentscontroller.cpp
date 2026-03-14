@@ -37,6 +37,8 @@
 #include <QList>
 #include <QRegularExpression>
 #include <QUrl>
+#include <QUrlQuery>
+#include <QSet>
 
 #include "base/addtorrentmanager.h"
 #include "base/bittorrent/categoryoptions.h"
@@ -53,6 +55,8 @@
 #include "base/interfaces/iapplication.h"
 #include "base/global.h"
 #include "base/logger.h"
+#include "base/net/downloadmanager.h"
+#include "base/preferences.h"
 #include "base/torrentfilter.h"
 #include "base/utils/datetime.h"
 #include "base/utils/fs.h"
@@ -1389,6 +1393,85 @@ void TorrentsController::reannounceAction()
 
     const QStringList hashes {params()[u"hashes"_s].split(u'|')};
     applyToTorrents(hashes, [](BitTorrent::Torrent *const torrent) { torrent->forceReannounce(); });
+}
+
+void TorrentsController::manageRatioAction()
+{
+    requireParams({u"hashes"_s, u"uploaded"_s, u"downloaded"_s});
+
+    bool isUploadedValid = false;
+    const qlonglong uploaded = params()[u"uploaded"_s].toLongLong(&isUploadedValid);
+    if (!isUploadedValid || (uploaded < 0))
+        throw APIError(APIErrorType::BadParams, tr("Invalid uploaded value"));
+
+    bool isDownloadedValid = false;
+    const qlonglong downloaded = params()[u"downloaded"_s].toLongLong(&isDownloadedValid);
+    if (!isDownloadedValid || (downloaded < 0))
+        throw APIError(APIErrorType::BadParams, tr("Invalid downloaded value"));
+
+    const QStringList hashes {params()[u"hashes"_s].split(u'|')};
+
+    QSet<QString> trackers;
+    applyToTorrents(hashes, [&trackers](BitTorrent::Torrent *const torrent)
+    {
+        const QList<BitTorrent::TrackerEntryStatus> torrentTrackers = torrent->trackers();
+        for (const BitTorrent::TrackerEntryStatus &tracker : torrentTrackers)
+        {
+            const QUrl trackerUrl {tracker.url};
+            if (trackerUrl.isValid() && ((trackerUrl.scheme() == u"http"_s) || (trackerUrl.scheme() == u"https"_s)))
+                trackers.insert(tracker.url);
+        }
+    });
+
+    if (trackers.isEmpty())
+        throw APIError(APIErrorType::Conflict, tr("No HTTP(S) trackers were found for selected torrent(s)"));
+
+    const QString event = params().value(u"event"_s).trimmed();
+    static const QSet<QString> supportedEvents = {u"started"_s, u"stopped"_s, u"completed"_s, u"paused"_s};
+    if (!event.isEmpty() && !supportedEvents.contains(event))
+        throw APIError(APIErrorType::BadParams, tr("Invalid event value"));
+
+    const QString peerID = params().value(u"peer_id"_s).trimmed();
+    const QString port = params().value(u"port"_s).trimmed();
+    const QString numwant = params().value(u"numwant"_s).trimmed();
+
+    for (const QString &trackerURL : trackers)
+    {
+        QUrl announceURL {trackerURL};
+
+        if (!announceURL.path().endsWith(u"/announce"_s))
+        {
+            QString trackerPath = announceURL.path();
+            while (trackerPath.endsWith(u'/'))
+                trackerPath.chop(1);
+            announceURL.setPath(trackerPath + u"/announce"_s);
+        }
+
+        QUrlQuery query {announceURL};
+        query.addQueryItem(u"uploaded"_s, QString::number(uploaded));
+        query.addQueryItem(u"downloaded"_s, QString::number(downloaded));
+        query.addQueryItem(u"left"_s, u"0"_s);
+
+        if (!event.isEmpty())
+            query.addQueryItem(u"event"_s, event);
+        if (!peerID.isEmpty())
+            query.addQueryItem(u"peer_id"_s, peerID);
+        if (!port.isEmpty())
+            query.addQueryItem(u"port"_s, port);
+        if (!numwant.isEmpty())
+            query.addQueryItem(u"numwant"_s, numwant);
+
+        announceURL.setQuery(query);
+
+        Net::DownloadManager::instance()->download(Net::DownloadRequest(announceURL.toString())
+                , Preferences::instance()->useProxyForGeneralPurposes(), this, [announceURL](const Net::DownloadResult &result)
+        {
+            if (result.status == Net::DownloadStatus::Success)
+                LogMsg(tr("Manage Ratio announce sent to %1").arg(announceURL.toString()), Log::INFO);
+            else
+                LogMsg(tr("Manage Ratio announce failed for %1. Reason: \"%2\"").arg(announceURL.toString(), result.errorString), Log::WARNING);
+        });
+    }
 }
 
 void TorrentsController::setCategoryAction()
