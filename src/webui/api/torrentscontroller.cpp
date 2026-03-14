@@ -1397,17 +1397,34 @@ void TorrentsController::reannounceAction()
 
 void TorrentsController::manageRatioAction()
 {
-    requireParams({u"hashes"_s, u"uploaded"_s, u"downloaded"_s});
+    requireParams({u"hashes"_s});
 
-    bool isUploadedValid = false;
-    const qlonglong uploaded = params()[u"uploaded"_s].toLongLong(&isUploadedValid);
-    if (!isUploadedValid || (uploaded < 0))
-        throw APIError(APIErrorType::BadParams, tr("Invalid uploaded value"));
+    const bool reportUploaded = parseBool(params().value(u"report_uploaded"_s)).value_or(true);
+    const bool reportDownloaded = parseBool(params().value(u"report_downloaded"_s)).value_or(true);
 
-    bool isDownloadedValid = false;
-    const qlonglong downloaded = params()[u"downloaded"_s].toLongLong(&isDownloadedValid);
-    if (!isDownloadedValid || (downloaded < 0))
-        throw APIError(APIErrorType::BadParams, tr("Invalid downloaded value"));
+    qlonglong uploaded = 0;
+    if (reportUploaded)
+    {
+        if (!params().contains(u"uploaded"_s))
+            throw APIError(APIErrorType::BadParams, tr("Missing uploaded value"));
+
+        bool isUploadedValid = false;
+        uploaded = params()[u"uploaded"_s].toLongLong(&isUploadedValid);
+        if (!isUploadedValid || (uploaded < 0))
+            throw APIError(APIErrorType::BadParams, tr("Invalid uploaded value"));
+    }
+
+    qlonglong downloaded = 0;
+    if (reportDownloaded)
+    {
+        if (!params().contains(u"downloaded"_s))
+            throw APIError(APIErrorType::BadParams, tr("Missing downloaded value"));
+
+        bool isDownloadedValid = false;
+        downloaded = params()[u"downloaded"_s].toLongLong(&isDownloadedValid);
+        if (!isDownloadedValid || (downloaded < 0))
+            throw APIError(APIErrorType::BadParams, tr("Invalid downloaded value"));
+    }
 
     const QStringList hashes {params()[u"hashes"_s].split(u'|')};
 
@@ -1448,8 +1465,10 @@ void TorrentsController::manageRatioAction()
         }
 
         QUrlQuery query {announceURL};
-        query.addQueryItem(u"uploaded"_s, QString::number(uploaded));
-        query.addQueryItem(u"downloaded"_s, QString::number(downloaded));
+        if (reportUploaded)
+            query.addQueryItem(u"uploaded"_s, QString::number(uploaded));
+        if (reportDownloaded)
+            query.addQueryItem(u"downloaded"_s, QString::number(downloaded));
         query.addQueryItem(u"left"_s, u"0"_s);
 
         if (!event.isEmpty())
